@@ -1,0 +1,17 @@
+i2c:
+  sda: GPIO16
+  scl: GPIO17
+  frequency: 400kHz
+
+font:
+  - file: "gfonts://Roboto"
+    id: roboto_65
+    size: 65    
+
+display:
+  - platform: ssd1306_i2c
+#    model: "SSD1306 128x64"
+    model: "SH1106 128x64"
+    address: 0x3C
+    lambda: |-
+      it.printf(0, 0, id(roboto_65), "%.0f", id(bbq_temp).state);
