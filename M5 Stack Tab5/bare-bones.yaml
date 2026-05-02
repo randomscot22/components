@@ -1,0 +1,426 @@
+esphome:
+  name: m5-tab-dev
+  friendly_name: M5Stack Tab5 Home Assistant Development
+  min_version: 2025.12.0
+
+esp32:
+  board: esp32-p4-evboard
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+
+#packages:
+#  remote_package_files:
+#      url: https://github.com/m5stack/esphome-yaml
+#      files: [ common/tab5-globals.yaml, common/tab5-lvgl.yaml, common/tab5-scripts.yaml]
+#      refresh: 1d
+
+esp32_hosted:
+  variant: esp32c6
+  active_high: true
+  clk_pin: GPIO12
+  cmd_pin: GPIO13
+  d0_pin: GPIO11
+  d1_pin: GPIO10
+  d2_pin: GPIO9
+  d3_pin: GPIO8
+  reset_pin: GPIO15
+  slot: 1
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+psram:
+  mode: hex
+  speed: 200MHz
+
+api:
+  encryption:
+    key: "viWcHBjAZJLkmAttmVjyBKIticIjG2xBoQSWG7wRsHk="
+
+
+ota:
+  platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+
+# For Thermocouple, frequency needs to be 200Hz and scan needs to be 'false'
+i2c:
+  - id: bsp_bus
+    sda: GPIO31
+    scl: GPIO32
+    frequency: 200kHz
+    scan: false
+
+pi4ioe5v6408:
+  - id: pi4ioe1
+    address: 0x43
+    # 0: O - wifi_antenna_int_ext
+    # 1: O - speaker_enable
+    # 2: O - external_5v_power
+    # 3: NC
+    # 4: O - lcd reset
+    # 5: O - touch panel reset
+    # 6: O - camera reset
+    # 7: I - headphone detect
+  - id: pi4ioe2
+    address: 0x44
+    # 0: O - wifi_power
+    # 1: NC
+    # 2: NC
+    # 3: O - usb_5v_power
+    # 4: O - poweroff pulse
+    # 5: O - quick charge enable (inverted)
+    # 6: I - charging status
+    # 7: O - charge enable
+
+switch:
+  - platform: gpio
+    id: wifi_power
+    name: "WiFi Power"
+    pin:
+      pi4ioe5v6408: pi4ioe2
+      number: 0
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: usb_5v_power
+    name: "USB Power"
+    pin:
+      pi4ioe5v6408: pi4ioe2
+      number: 3
+  - platform: gpio
+    id: quick_charge
+    name: "Quick Charge"
+    pin:
+      pi4ioe5v6408: pi4ioe2
+      number: 5
+      inverted: true
+  - platform: gpio
+    id: charge_enable
+    name: "Charge Enable"
+    pin:
+      pi4ioe5v6408: pi4ioe2
+      number: 7
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: wifi_antenna_int_ext
+    pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 0
+  - platform: gpio
+    id: speaker_enable
+    name: "Speaker Enable"
+    pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 1
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: external_5v_power
+    name: "External 5V Power"
+    pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 2
+
+binary_sensor:
+  - platform: gpio
+    id: charging
+    name: "Charging Status"
+    pin:
+      pi4ioe5v6408: pi4ioe2
+      number: 6
+      mode: INPUT_PULLDOWN
+    on_press:
+      - lambda: id(battery_percent).update();
+    on_release:
+      - lambda: id(battery_percent).update();
+
+  - platform: gpio
+    id: headphone_detect
+    name: "Headphone Detect"
+    pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 7
+
+select:
+# The DAC Output select needs to be manually 
+# (or with an automation) changed to `LINE1` for the onboard speaker
+  - platform: es8388
+    dac_output:
+      name: DAC Output
+    adc_input_mic:
+      name: ADC Input Mic
+
+  - platform: template
+    id: wifi_antenna_select
+    name: "WiFi Antenna"
+    options:
+      - "Internal"
+      - "External"
+    optimistic: true
+    on_value:
+      - if:
+          condition:
+            lambda: return i == 0;
+          then:
+            - switch.turn_off: wifi_antenna_int_ext
+          else:
+            - switch.turn_on: wifi_antenna_int_ext
+
+sensor: 
+
+  - platform: homeassistant
+    id: grill_temp
+    entity_id: sensor.m5stack_tab5_home_assistant_hmi_thermocouple_temperature
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: grill_temp_label
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.1f°C", x);
+              return std::string(buf);
+  
+  - platform: homeassistant
+    id: internal_temp
+    entity_id: sensor.meater_7a825308a953279841326fcce014155f53ff01bb11f20acd4365954296a48493_internal
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: internal_temp_label
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.1f°C", x);
+              return std::string(buf);
+
+
+  - platform: ina226
+    address: 0x41
+    adc_averaging: 16
+    max_current: 8.192A
+    shunt_resistance: 0.005ohm
+    bus_voltage:
+      id: battery_voltage
+      name: Battery Voltage
+    current:
+      id: battery_current
+      name: Battery Current
+      # Positive means discharging
+      # Negative means charging
+  
+  - platform: homeassistant
+    id: cur_temp
+    entity_id: sensor.temperature
+
+  
+  - platform: homeassistant
+    id: cur_humi
+    entity_id: sensor.env_iv_kit_humidity
+
+  - platform: homeassistant
+    id: cur_co2
+    entity_id: sensor.env_iv_kit_co2_equivalent
+
+
+  - platform: template
+    id: battery_percent
+    name: "Battery Percentage"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    lambda: |-
+      float voltage = id(battery_voltage).state;
+      float min_voltage = 6.0;
+      float max_voltage = 8.4;
+      
+      if (voltage < 5.0) return 0.0;
+      if (voltage <= min_voltage) return 0.0;
+      if (voltage >= max_voltage) return 100.0;
+      
+      float percent = ((voltage - min_voltage) / (max_voltage - min_voltage)) * 100.0;
+      return percent;
+    update_interval: 10s
+ 
+  
+touchscreen:
+  - platform: gt911
+    interrupt_pin: GPIO23
+    update_interval: never
+    reset_pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 5
+    transform:
+      swap_xy: true
+      mirror_x: true
+    calibration:
+      x_min: 0
+      x_max: 1280
+      y_min: 0
+      y_max: 720
+    id: touch
+
+      
+esp_ldo:
+  - voltage: 2.5V
+    channel: 3
+
+display:
+  - platform: mipi_dsi
+    dimensions:
+      height: 1280
+      width: 720
+    model: M5Stack-Tab5
+    # rotation: 90°
+    reset_pin:
+      pi4ioe5v6408: pi4ioe1
+      number: 4
+    id: main_display
+
+output:
+  - platform: ledc
+    pin: GPIO22
+    id: backlight_pwm
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: RESTORE_DEFAULT_ON
+    default_transition_length: 250ms
+
+i2s_audio:
+  - id: mic_bus
+    i2s_lrclk_pin: GPIO29
+    i2s_bclk_pin: GPIO27
+    i2s_mclk_pin: GPIO30
+
+audio_adc:
+  - platform: es7210
+    id: es7210_adc
+    bits_per_sample: 16bit
+    sample_rate: 16000
+
+microphone:
+  - platform: i2s_audio
+    id: tab5_microphone
+    i2s_din_pin: GPIO28
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    adc_type: external
+
+audio_dac:
+  - platform: es8388
+    id: es8388_dac
+
+speaker:
+  - platform: i2s_audio
+    id: tab5_speaker
+    i2s_dout_pin: GPIO26
+    audio_dac: es8388_dac
+    dac_type: external
+    channel: mono
+    buffer_duration: 100ms
+    bits_per_sample: 16bit
+    sample_rate: 48000
+
+media_player:
+  - platform: speaker
+    name: tab5_media_player
+    id: speaker_player
+    announcement_pipeline:
+      speaker: tab5_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        rx8130.write_time:
+  - platform: rx8130
+    id: rx8130_time
+    update_interval: never
+
+# Sample LVGL Code from this point - simple two row widgets
+
+font:
+  - file:
+      type: gfonts
+      family: Roboto
+    id: roboto_large
+    size: 64
+    bpp: 4
+  - file:
+      type: gfonts
+      family: Roboto
+    id: roboto_huge
+    size: 128
+    bpp: 4
+
+lvgl:
+  rotation: 90
+  pages:
+    - id: main_page
+      widgets:
+        # Background card
+        - obj:
+            align: TOP_MID
+            width: 1280
+            height: 360
+            radius: 12
+            bg_color: "WHITE"
+            border_width: 0
+            shadow_width: 10
+            shadow_color: 0x000000
+            shadow_opa: 80%
+            widgets:
+              # Label: "TEMPERATURE"
+              - label:
+                  align: TOP_MID
+                  y: 30
+                  text: " GRILL TEMPERATURE"
+                  text_font: roboto_large
+                  text_color: "BLACK"
+
+              # Label: the actual value (updated dynamically)
+              - label:
+                  id: grill_temp_label
+                  align: CENTER
+                  y: 68
+                  text: "--.-°C"
+                  text_font: roboto_huge
+                  text_color: "BLACK"
+        - obj:
+            align: BOTTOM_MID
+            width: 1280
+            height: 360
+            radius: 12
+            bg_color: "WHITE"
+            border_width: 0
+            shadow_width: 10
+            shadow_color: 0x000000
+            shadow_opa: 80%
+            widgets:
+              # Label: "TEMPERATURE"
+              - label:
+                  align: TOP_MID
+                  y: 30
+                  text: "INTERNAL TEMPERATURE"
+                  text_font: roboto_large
+                  text_color: "BLACK"
+              # Label: the actual value (updated dynamically)
+              - label:
+                  id: internal_temp_label
+                  align: CENTER
+                  y: 68
+                  text: "--.-°C"
+                  text_font: roboto_huge
+                  text_color: "BLACK"
+
